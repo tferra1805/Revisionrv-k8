@@ -19,8 +19,11 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   const dow = k => (pkey(k).getDay() + 6) % 7;
   const weekStart = k => addDays(k, -dow(k));
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-  const hh = h => { const H = Math.floor(h), m = Math.round((h - H) * 60); return pad(H % 24) + ':' + pad(m); };
-  const fmtLen = l => { const H = Math.floor(l), m = Math.round((l - H) * 60); return ((H ? H + 'h' : '') + (m ? (H ? ' ' : '') + m + 'm' : '')) || '0m'; };
+  const hh = h => { const t = Math.round(h * 60), H = Math.floor(t / 60); return pad(H % 24) + ':' + pad(t % 60); };
+  const fmtLen = l => { const t = Math.round(l * 60), H = Math.floor(t / 60), m = t % 60; return ((H ? H + 'h' : '') + (m ? (H ? ' ' : '') + m + 'm' : '')) || '0m'; };
+  const U = 12, EPS = 1e-6;
+  const q5 = h => Math.round(h * U) / U;
+  const ceilQ = x => Math.ceil(x * U - EPS) / U;
   const nowH = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60; };
   const ceilHalf = x => Math.ceil(x * 2 - 1e-9) / 2;
   const halves = (a, b) => { const o = []; for (let h = a; h < b - 1e-9; h += 0.5) o.push(h); return o; };
@@ -92,6 +95,8 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   const MODE = { focus: 'Focus', short: 'Short break', long: 'Long break' };
   const PRESET_MIN = [25, 30, 45, 60];
   const LENS = [0.5, 1, 1.5, 2, 2.5, 3, 4];
+  const LEN_MIN = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180];
+  const lensOpts = cur => { const c = Math.round(cur * 60), list = LEN_MIN.includes(c) ? LEN_MIN : LEN_MIN.concat([c]).sort((a, b) => a - b); return list.map(m => `<option value="${m / 60}"${m === c ? ' selected' : ''}>${fmtLen(m / 60)}</option>`).join(''); };
   const RING = 879.65;
 
   /* ---------- state ---------- */
@@ -115,7 +120,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     o.blocks.forEach((b, i) => {
       b.doneOn = b.doneOn || []; b.skip = b.skip || []; b.text = b.text || ''; b.note = b.note || '';
       if (b.start === undefined || b.start === '') b.start = null;
-      b.len = Number(b.len) || 1; b.order = b.order || i; b.kind = KINDS[b.kind] ? b.kind : 'revise';
+      b.len = Math.max(1 / U, q5(Number(b.len) || 1)); if (b.start != null) b.start = q5(Number(b.start)); b.order = b.order || i; b.kind = KINDS[b.kind] ? b.kind : 'revise';
       b.col = b.col == null || b.col === '' ? null : Number(b.col);
     });
     o.boards.forEach(b => { b.cards = b.cards || []; });
@@ -176,8 +181,8 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   const timedOn = k => itemsOn(k).filter(b => b.start != null).sort((a, b) => a.start - b.start);
   const listOn = k => itemsOn(k).filter(b => b.start == null).sort((a, b) => a.order - b.order);
   const planItems = k => itemsOn(k).filter(b => isStudy(b) || !b.repeat).sort((a, b) => (a.start == null) - (b.start == null) || (a.start - b.start) || a.order - b.order);
-  const clashes = (k, start, len, ignore) => start == null ? [] : timedOn(k).filter(b => b.id !== ignore && b.start < start + len - 1e-9 && start < b.start + b.len - 1e-9);
-  const freeAt = (k, h, len, ignore) => h >= state.settings.dayStart && h + len <= state.settings.dayEnd + 1e-9 && !clashes(k, h, len, ignore).length;
+  const clashes = (k, start, len, ignore) => start == null ? [] : timedOn(k).filter(b => b.id !== ignore && b.start < start + len - EPS && start < b.start + b.len - EPS);
+  const freeAt = (k, h, len, ignore) => h >= state.settings.dayStart && h + len <= state.settings.dayEnd + EPS && !clashes(k, h, len, ignore).length;
   function itemTitle(b) { const K = KINDS[b.kind] || KINDS.other, s = subj(b.subjectId); return b.text || (K.study ? (s ? s.name : K.label) : K.label); }
   function itemMeta(b, withTime = true) {
     const K = KINDS[b.kind] || KINDS.other, s = subj(b.subjectId);
@@ -200,7 +205,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   }
   function freeInWindows(days) {
     let free = 0;
-    days.forEach(k => { const w = win(k); halves(w.from, w.to).forEach(h => { if (!clashes(k, h, 0.5).length) free += 0.5; }); });
+    days.forEach(k => { const w = win(k); for (let i = Math.round(w.from * U); i < Math.round(w.to * U); i++) { if (!clashes(k, i / U, 1 / U).length) free += 1 / U; } });
     return free;
   }
   function streak() {
@@ -232,31 +237,35 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       let sid = state.ui.addSubj && subj(state.ui.addSubj) ? state.ui.addSubj : '', text = p;
       const m = p.match(/^([^:]{2,30}):\s*(.+)$/);
       if (m) { const s = matchSubject(m[1]); if (s) { sid = s.id; text = m[2].trim(); } }
-      state.blocks.push({ id: uid(), date: k, start: null, len: len || state.settings.defLen, kind: 'revise', subjectId: sid, text, note: '', done: false, doneOn: [], skip: [], repeat: false, order: ord + n });
+      let ln = len || state.settings.defLen;
+      const dm = text.match(/^(.*\S)\s+(\d{1,3})\s?(?:m|min|mins|minutes)$/i), hm = text.match(/^(.*\S)\s+(\d{1,2}(?:\.\d+)?)\s?h(?:ours?|rs?)?(?:\s?(\d{1,2})\s?(?:m(?:in)?)?)?$/i);
+      if (dm) { ln = clamp(Number(dm[2]), 5, 720) / 60; text = dm[1]; }
+      else if (hm) { ln = clamp(Math.round((Number(hm[2]) * 60 + Number(hm[3] || 0)) / 5) * 5, 5, 720) / 60; text = hm[1]; }
+      state.blocks.push({ id: uid(), date: k, start: null, len: q5(ln), kind: 'revise', subjectId: sid, text, note: '', done: false, doneOn: [], skip: [], repeat: false, order: ord + n });
       n++;
     });
     return n;
   }
   function autoTime(k, items) {
-    const S = state.settings, w = win(k), t = today();
+    const S = state.settings, w = win(k), t = today(), Q = 1 / U;
     if (k < t) return { placed: 0, late: 0, left: items.length };
-    const nowStart = k === t ? ceilHalf(nowH()) : S.dayStart;
-    let cur = Math.max(w.from, nowStart), run = 0, placed = 0, late = 0;
+    const nowStart = k === t ? ceilQ(nowH()) : S.dayStart;
+    let cur = q5(Math.max(w.from, nowStart)), run = 0, placed = 0, late = 0;
     const rest = [];
     items.forEach(it => {
-      const len = it.len || 1; let h = cur, found = null;
-      while (h + len <= w.to + 1e-9) {
-        if (S.breakEvery && run >= S.breakEvery - 1e-9) { h += 0.5; run = 0; continue; }
+      const len = q5(it.len || 1); let h = cur, found = null;
+      while (h + len <= w.to + EPS) {
+        if (S.breakEvery && run >= S.breakEvery - EPS) { h = q5(h + 0.5); run = 0; continue; }
         if (freeAt(k, h, len, it.id)) { found = h; break; }
-        h += 0.5; run = 0;
+        h = q5(h + Q); run = 0;
       }
-      if (found != null) { it.start = found; it.date = k; placed++; run = (found === cur ? run : 0) + len; cur = found + len; }
+      if (found != null) { it.start = found; it.date = k; placed++; run = (Math.abs(found - cur) < EPS ? run : 0) + len; cur = q5(found + len); }
       else rest.push(it);
     });
     let left = 0;
     rest.forEach(it => {
-      const len = it.len || 1; let found = null;
-      for (let h = Math.max(nowStart, S.dayStart); h + len <= S.dayEnd + 1e-9; h += 0.5) if (freeAt(k, h, len, it.id)) { found = h; break; }
+      const len = q5(it.len || 1); let found = null;
+      for (let h = q5(Math.max(nowStart, S.dayStart)); h + len <= S.dayEnd + EPS; h = q5(h + Q)) if (freeAt(k, h, len, it.id)) { found = h; break; }
       if (found != null) { it.start = found; it.date = k; placed++; late++; } else left++;
     });
     return { placed, late, left };
@@ -358,7 +367,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   /* ---------- PLAN: day ---------- */
   function blockHTML(b, k, style, mode) {
     const done = isDone(b, k), K = KINDS[b.kind] || KINDS.other, sub = itemMeta(b, false);
-    return `<div class="tt-block kind-${b.kind}${b.len <= 0.5 ? ' short' : ''}${done ? ' is-done' : ''}" style="${style};${hueStyle(b)}" data-act="blk" data-id="${b.id}" data-k="${k}" data-drag draggable="true" tabindex="0" role="button" aria-label="${esc(itemTitle(b))}, ${hh(b.start)} to ${hh(b.start + b.len)}${done ? ', done' : ''}">
+    return `<div class="tt-block kind-${b.kind}${b.len <= 0.5 + EPS ? ' short' : ''}${b.len < 0.25 - EPS ? ' tiny' : b.len < 0.5 - EPS ? ' xs' : ''}${done ? ' is-done' : ''}" style="${style};${hueStyle(b)}" data-act="blk" data-id="${b.id}" data-k="${k}" data-drag draggable="true" tabindex="0" role="button" aria-label="${esc(itemTitle(b))}, ${hh(b.start)} to ${hh(b.start + b.len)}${done ? ', done' : ''}" title="${esc(itemTitle(b))} · ${hh(b.start)} to ${hh(b.start + b.len)}">
       <span class="b-time">${hh(b.start)}–${hh(b.start + b.len)}${b.repeat ? ic('repeat', 'b-rep') : ''}</span>
       <span class="b-title">${esc(itemTitle(b))}</span>
       ${sub ? `<span class="b-sub">${esc(sub)}</span>` : ''}
@@ -366,19 +375,19 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       ${mode === 'day' || mode === 'wk' ? '<span class="b-resize" data-resize title="Drag to change length"></span>' : ''}</div>`;
   }
   function timelineHTML(k) {
-    const S = state.settings, t = today(), nh = nowH(), rows = (S.dayEnd - S.dayStart) * 2;
-    const row = h => 1 + Math.round((h - S.dayStart) * 2), w = win(k);
+    const S = state.settings, t = today(), nh = nowH(), rows = (S.dayEnd - S.dayStart) * U;
+    const row = h => 1 + Math.round((h - S.dayStart) * U), w = win(k);
     let out = `<div class="tt tt-day" id="tt-day" data-r0="1" style="--cols:1;--rows:${rows}">`;
-    for (let h = S.dayStart; h < S.dayEnd; h++) out += `<div class="tt-time" style="grid-row:${row(h)} / span 2">${hh(h)}</div>`;
+    for (let h = S.dayStart; h < S.dayEnd; h++) out += `<div class="tt-time" style="grid-row:${row(h)} / span ${U}">${hh(h)}</div>`;
     halves(S.dayStart, S.dayEnd).forEach(h => {
       const past = k < t || (k === t && h + 0.5 <= nh), inWin = h >= w.from && h < w.to;
-      out += `<button type="button" class="tt-slot${h % 1 ? ' half' : ''}${past ? ' past' : ''}${inWin ? ' in-win' : ''}" data-act="slot" data-k="${k}" data-h="${h}" style="grid-column:2;grid-row:${row(h)}" aria-label="Plan at ${hh(h)}">${ic('plus')}<span>${hh(h)}</span></button>`;
+      out += `<button type="button" class="tt-slot${h % 1 ? ' half' : ''}${past ? ' past' : ''}${inWin ? ' in-win' : ''}" data-act="slot" data-k="${k}" data-h="${h}" style="grid-column:2;grid-row:${row(h)} / span ${U / 2}" aria-label="Plan at ${hh(h)}">${ic('plus')}<span>${hh(h)}</span></button>`;
     });
     timedOn(k).forEach(b => {
       const s = Math.max(b.start, S.dayStart), e = Math.min(b.start + b.len, S.dayEnd); if (e <= s) return;
-      out += blockHTML(b, k, `grid-column:2;grid-row:${row(s)} / span ${Math.round((e - s) * 2)}`, 'day');
+      out += blockHTML(b, k, `grid-column:2;grid-row:${row(s)} / span ${Math.round((e - s) * U)}`, 'day');
     });
-    if (k === t && nh >= S.dayStart && nh < S.dayEnd) out += `<div class="tt-now" style="grid-column:2;grid-row:${row(Math.floor(nh * 2) / 2)}"><i style="top:${((nh * 2) % 1) * 100}%"></i></div>`;
+    if (k === t && nh >= S.dayStart && nh < S.dayEnd) out += `<div class="tt-now" style="grid-column:2;grid-row:${row(Math.floor(nh * U) / U)}"><i style="top:${((nh * U) % 1) * 100}%"></i></div>`;
     return out + '</div>';
   }
   function nowCard(k) {
@@ -398,7 +407,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     const t = today(), isT = k === t, list = listOn(k), open = list.filter(b => !isDone(b, k)), doneL = list.filter(b => isDone(b, k));
     const timed = timedOn(k).filter(isStudy).length;
     const carry = isT ? state.blocks.filter(b => !b.repeat && b.date < t && b.date >= addDays(t, -14) && isStudy(b) && !b.done) : [];
-    const lens = LENS.slice(0, 5).map(l => `<option value="${l}"${l === state.settings.defLen ? ' selected' : ''}>${fmtLen(l)}</option>`).join('');
+    const lens = lensOpts(state.settings.defLen);
     return `${carry.length ? `<div class="carry">${ic('arrow')}<span>${plural(carry.length, 'unfinished topic')} from earlier days.</span><button type="button" class="btn sm" data-act="carry">Move to today</button></div>` : ''}
       <div class="day-top">${isT ? nowCard(k) : ''}${kpis([k], isT ? 'today' : 'this day')}</div>
       <div class="planner">
@@ -406,7 +415,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
           <div class="card-h"><h2 class="card-title">Revision list</h2><span class="muted-s">${plural(open.length, 'untimed topic')} · ${timed} timed</span></div>
           ${subjBar()}
           <form class="add" data-form="add" data-k="${k}"><div class="add-row"><input type="text" id="add-text" data-keep placeholder="What are you revising? e.g. Ionic bonding" maxlength="300" aria-label="Topic to revise" autocomplete="off"><select id="add-len" aria-label="How long">${lens}</select><button class="btn primary" type="submit">${ic('plus')}Add</button></div>
-            <p class="hint">Add several at once with a semicolon. Start with a subject to tag it, like <b>Chem: ionic bonding</b>.</p>
+            <p class="hint">Add several at once with a semicolon. Start with a subject to tag it, like <b>Chem: ionic bonding</b>. End with a length, like <b>Mitosis 25m</b>.</p>
             <button type="button" class="link-btn" data-act="bulk-toggle">${bulkOpen ? 'Hide the big box' : 'Paste a whole list'}</button>
             ${bulkOpen ? `<textarea id="bulk-text" data-keep rows="5" placeholder="One topic per line&#10;Biology: Mitosis&#10;Chem: Ionic bonding&#10;Quadratics"></textarea><button type="button" class="btn sm" data-act="bulk-add" data-k="${k}">${ic('plus')}Add all</button>` : ''}</form>
           <ul class="its">${open.map(b => itemRow(b, k, 'day')).join('') || `<li class="empty">${isT ? 'Nothing waiting for a time. Add what you want to revise today.' : 'No untimed topics on this day.'}</li>`}${doneL.map(b => itemRow(b, k, 'day')).join('')}</ul>
@@ -420,24 +429,24 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   /* ---------- PLAN: week (hour-by-hour grid) ---------- */
   function weekView(ws) {
     const S = state.settings, t = today(), nh = nowH(), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-    const rows = (S.dayEnd - S.dayStart) * 2, R0 = 3, row = h => R0 + Math.round((h - S.dayStart) * 2);
+    const rows = (S.dayEnd - S.dayStart) * U, R0 = 3, row = h => R0 + Math.round((h - S.dayStart) * U);
     const st = periodStats(days), free = freeInWindows(days), pct = Math.min(100, Math.round(st.hrs / S.target * 100));
     const defDay = days.includes(t) ? t : days[0];
-    const lens = LENS.slice(0, 5).map(l => `<option value="${l}"${l === S.defLen ? ' selected' : ''}>${fmtLen(l)}</option>`).join('');
+    const lens = lensOpts(S.defLen);
     const dayOpts = days.map(k => `<option value="${k}"${k === defDay ? ' selected' : ''}>${fmt(k, { weekday: 'short', day: 'numeric' })}</option>`).join('');
 
     const bar = `<div class="tt-bar"><div class="row">
         <button type="button" class="btn primary" data-act="auto-week">${ic('sparkle')}Auto-plan week</button>
         <button type="button" class="btn" data-act="copyweek">${ic('copy')}Copy last week</button>
         <button type="button" class="btn ghost danger" data-act="clearweek" data-confirm="Clear this week?">${ic('trash')}Clear</button></div>
-      <span class="muted-s">Free half hour to add. Drag to move. Pull the bottom edge to resize.</span></div>`;
+      <span class="muted-s">Click a free slot to add. Drag to move. Pull the bottom edge to resize in 5 minute steps.</span></div>`;
 
     const add = `<form class="add wk-add" data-form="add" data-k="${defDay}">
       ${subjBar()}
       <div class="add-row"><input type="text" id="add-text" data-keep placeholder="What are you revising? e.g. Ionic bonding" maxlength="300" aria-label="Topic to revise" autocomplete="off">
         <select id="add-day" data-keep aria-label="Which day">${dayOpts}</select><select id="add-len" aria-label="How long">${lens}</select>
         <button class="btn primary" type="submit">${ic('plus')}Add</button></div>
-      <p class="hint">Topics land in the <b>To time</b> row of that day. Drag them into the grid, or press Auto-plan. Several at once: separate with a semicolon, or <button type="button" class="link-btn" data-act="bulk-toggle">${bulkOpen ? 'hide the big box' : 'paste a whole list'}</button>.</p>
+      <p class="hint">Topics land in the <b>To time</b> row of that day. End with a length to set it, like <b>Mitosis 25m</b>. Drag them into the grid, or press Auto-plan. Several at once: separate with a semicolon, or <button type="button" class="link-btn" data-act="bulk-toggle">${bulkOpen ? 'hide the big box' : 'paste a whole list'}</button>.</p>
       ${bulkOpen ? `<textarea id="bulk-text" data-keep rows="5" placeholder="One topic per line&#10;Biology: Mitosis&#10;Chem: Ionic bonding&#10;Quadratics"></textarea><button type="button" class="btn sm" data-act="bulk-add" data-k="${defDay}">${ic('plus')}Add all</button>` : ''}</form>`;
 
     const stats = `<div class="tt-stats">
@@ -461,18 +470,18 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
         ${list.length > show.length ? `<button type="button" class="tmore" data-act="goto-day" data-k="${k}">+${list.length - show.length} more</button>` : ''}
         <button type="button" class="tadd" data-act="m-add" data-k="${k}" aria-label="Add something on ${fmt(k, { weekday: 'long' })}">${ic('plus')}</button></div>`;
     });
-    for (let h = S.dayStart; h < S.dayEnd; h++) g += `<div class="tt-time" style="grid-column:1;grid-row:${row(h)} / span 2">${hh(h)}</div>`;
+    for (let h = S.dayStart; h < S.dayEnd; h++) g += `<div class="tt-time" style="grid-column:1;grid-row:${row(h)} / span ${U}">${hh(h)}</div>`;
     days.forEach((k, i) => {
       const w = win(k);
       halves(S.dayStart, S.dayEnd).forEach(h => {
         const past = k < t || (k === t && h + 0.5 <= nh), inWin = h >= w.from && h < w.to;
-        g += `<button type="button" class="tt-slot${h % 1 ? ' half' : ''}${past ? ' past' : ''}${inWin ? ' in-win' : ''}${k === t ? ' is-today' : ''}" data-act="slot" data-k="${k}" data-h="${h}" style="grid-column:${i + 2};grid-row:${row(h)}" aria-label="Plan ${fmt(k, { weekday: 'long' })} at ${hh(h)}">${ic('plus')}</button>`;
+        g += `<button type="button" class="tt-slot${h % 1 ? ' half' : ''}${past ? ' past' : ''}${inWin ? ' in-win' : ''}${k === t ? ' is-today' : ''}" data-act="slot" data-k="${k}" data-h="${h}" style="grid-column:${i + 2};grid-row:${row(h)} / span ${U / 2}" aria-label="Plan ${fmt(k, { weekday: 'long' })} at ${hh(h)}">${ic('plus')}</button>`;
       });
       timedOn(k).forEach(b => {
         const s = Math.max(b.start, S.dayStart), e = Math.min(b.start + b.len, S.dayEnd); if (e <= s) return;
-        g += blockHTML(b, k, `grid-column:${i + 2};grid-row:${row(s)} / span ${Math.round((e - s) * 2)}`, 'wk');
+        g += blockHTML(b, k, `grid-column:${i + 2};grid-row:${row(s)} / span ${Math.round((e - s) * U)}`, 'wk');
       });
-      if (k === t && nh >= S.dayStart && nh < S.dayEnd) g += `<div class="tt-now" style="grid-column:${i + 2};grid-row:${row(Math.floor(nh * 2) / 2)}"><i style="top:${((nh * 2) % 1) * 100}%"></i></div>`;
+      if (k === t && nh >= S.dayStart && nh < S.dayEnd) g += `<div class="tt-now" style="grid-column:${i + 2};grid-row:${row(Math.floor(nh * U) / U)}"><i style="top:${((nh * U) % 1) * 100}%"></i></div>`;
     });
     g += '</div>';
     return bar + add + stats + `<div class="tt-scroll wk-scroll" id="wk-scroll" data-scroll>${g}</div>`;
@@ -550,7 +559,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       const sid = o.subjectId != null ? o.subjectId : (state.ui.addSubj && subj(state.ui.addSubj) ? state.ui.addSubj : '');
       draft = { id: null, k: o.k || cursor, start: o.h == null ? null : o.h, len: o.len || S.defLen, kind: o.kind || 'revise', col: null, subjectId: sid, text: o.text || '', note: '', repeat: false, done: false, delAsk: false, newSubj: false };
     }
-    if (draft.start != null) draft.len = clamp(draft.len, 0.5, Math.max(0.5, Math.max(S.dayEnd, draft.start + 0.5) - draft.start));
+    if (draft.start != null) draft.len = clamp(draft.len, 1 / U, Math.max(1 / U, Math.max(S.dayEnd, draft.start + 1 / U) - draft.start));
     openModal(editorHTML());
     if (!o.id) { const i = $('#ed-text'); if (i) i.focus(); }
   }
@@ -560,10 +569,13 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     const kinds = `<span class="kgroup"><em>Counts as revision</em>${Object.entries(KINDS).filter(e => e[1].study).map(kchip).join('')}</span><span class="kgroup"><em>Does not count</em>${Object.entries(KINDS).filter(e => !e[1].study).map(kchip).join('')}</span>`;
     const subjChips = `<button type="button" class="chip" data-act="ed-subj" data-v="" aria-pressed="${!d.subjectId}">None</button>` + state.subjects.map(x => `<button type="button" class="chip schip" data-act="ed-subj" data-v="${x.id}" aria-pressed="${x.id === d.subjectId}" style="--h:${x.hue}"><i class="sdot"></i>${esc(x.name)}</button>`).join('')
       + (d.newSubj ? `<span class="new-subj"><input type="text" id="ed-newsubj" placeholder="Subject name" maxlength="30" aria-label="New subject name"><button type="button" class="btn sm" data-act="ed-subj-create">Add</button></span>` : `<button type="button" class="chip ghost-chip" data-act="ed-subj-new">${ic('plus')}Subject</button>`);
-    const lo = Math.min(S.dayStart, d.start == null ? S.dayStart : d.start), hi = Math.max(S.dayEnd, d.start == null ? 0 : d.start + 0.5);
-    const starts = `<option value=""${d.start == null ? ' selected' : ''}>No time yet</option>` + halves(lo, hi).map(h => `<option value="${h}"${h === d.start ? ' selected' : ''}>${hh(h)}</option>`).join('');
-    const maxLen = d.start == null ? 6 : Math.min(8, hi - d.start);
-    const lens = LENS.concat([5, 6, 8]).filter(l => l <= maxLen + 1e-9).map(l => `<option value="${l}"${l === d.len ? ' selected' : ''}>${fmtLen(l)}</option>`).join('');
+    const sH = d.start == null ? null : Math.floor(Math.round(d.start * 60) / 60), sM = d.start == null ? 0 : Math.round(d.start * 60) % 60;
+    const hLo = Math.min(S.dayStart, sH == null ? S.dayStart : sH), hHi = Math.min(24, Math.max(S.dayEnd, sH == null ? 0 : sH + 1));
+    const hours = `<option value=""${d.start == null ? ' selected' : ''}>No time yet</option>` + Array.from({ length: hHi - hLo }, (_, i) => hLo + i).map(h => `<option value="${h}"${h === sH ? ' selected' : ''}>${pad(h % 24)}</option>`).join('');
+    const mins = Array.from({ length: 12 }, (_, i) => i * 5).map(m => `<option value="${m}"${m === sM ? ' selected' : ''}>${pad(m)}</option>`).join('');
+    const lmin = Math.round(d.len * 60);
+    const lenQ = [5, 10, 15, 20, 30, 45, 60, 90, 120].map(m => `<button type="button" class="chip" data-act="ed-lenq" data-v="${m}" aria-pressed="${lmin === m}">${fmtLen(m / 60)}</button>`).join('');
+    const hi = hHi;
     const cl = clashes(d.k, d.start, d.len, d.id);
     const ex = d.id && blockById(d.id);
     let del = '';
@@ -578,8 +590,9 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       <div class="fld"><span>Colour</span><div class="chips cols">${ACT_HUES.map(h => `<button type="button" class="sw" data-act="ed-col" data-v="${h}" style="--h:${h}" aria-pressed="${(d.col == null ? ACT_HUES[0] : d.col) === h}" aria-label="Colour ${h}"></button>`).join('')}</div></div>` : ''}
       <div class="ed-grid">
         <label class="fld"><span>Day</span><input type="date" id="ed-date" data-ed="k" value="${d.k}"></label>
-        <label class="fld"><span>Start</span><select id="ed-start" data-ed="start">${starts}</select></label>
-        <label class="fld"><span>Length</span><select id="ed-len" data-ed="len">${lens}</select></label>
+        <div class="fld"><span>Start</span><div class="timepick"><select id="ed-sh" data-ed="sh" aria-label="Start hour">${hours}</select><b>:</b><select id="ed-sm" data-ed="sm" aria-label="Start minute"${d.start == null ? ' disabled' : ''}>${mins}</select></div></div>
+        <label class="fld"><span>Length (minutes)</span><input type="number" id="ed-len" data-ed="lenmin" min="5" max="720" step="5" inputmode="numeric" value="${lmin}"></label>
+        <div class="fld fld-wide"><span>Quick lengths</span><div class="chips">${lenQ}</div></div>
         <label class="fld"><span>Note</span><input type="text" id="ed-note" data-ed="note" value="${esc(d.note)}" maxlength="80" placeholder="e.g. SME questions 1 to 10"></label>
       </div>
       ${s && K.study ? `<div class="sme-row"><span class="muted-s">Save My Exams</span>${smeLinks(s)}</div>` : ''}
@@ -597,12 +610,13 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   function edChange(el) {
     const f = el.dataset.ed, S = state.settings;
     if (f === 'repeat' || f === 'done') draft[f] = el.checked;
-    else if (f === 'start') draft.start = el.value === '' ? null : Number(el.value);
-    else if (f === 'len') draft.len = Number(el.value);
+    else if (f === 'sh') { if (el.value === '') draft.start = null; else draft.start = Number(el.value) + (draft.start == null ? 0 : Math.round(draft.start * 60) % 60) / 60; }
+    else if (f === 'sm') { if (draft.start != null) draft.start = Math.floor(Math.round(draft.start * 60) / 60) + Number(el.value) / 60; }
+    else if (f === 'lenmin') draft.len = Math.max(1 / U, q5((Number(el.value) || 5) / 60));
     else draft[f] = el.value;
     if (f === 'k' && !draft.k) draft.k = today();
     if (draft.start == null) draft.repeat = false;
-    else draft.len = clamp(draft.len, 0.5, Math.max(0.5, Math.max(S.dayEnd, draft.start + 0.5) - draft.start));
+    else draft.len = clamp(q5(draft.len), 1 / U, Math.max(1 / U, Math.max(S.dayEnd, draft.start + 1 / U) - draft.start));
     if (f !== 'note' && f !== 'text') renderEditor();
   }
   function saveDraft() {
@@ -615,7 +629,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     if (!b) { b = { id: uid(), doneOn: [], skip: [], done: false, order: Date.now() }; state.blocks.push(b); }
     if (d.repeat && d.start != null) { const keep = b.repeat && b.date && b.date < d.k; b.dow = dow(d.k); b.date = keep ? b.date : d.k; b.repeat = true; b.done = false; }
     else { b.repeat = false; b.date = d.k; delete b.dow; }
-    Object.assign(b, { start: d.start, len: d.len, kind: d.kind, col: d.kind === 'other' ? d.col : null, subjectId: K.study ? d.subjectId : '', text: d.text.trim(), note: d.note.trim() });
+    Object.assign(b, { start: d.start == null ? null : q5(d.start), len: Math.max(1 / U, q5(d.len)), kind: d.kind, col: d.kind === 'other' ? d.col : null, subjectId: K.study ? d.subjectId : '', text: d.text.trim(), note: d.note.trim() });
     setDone(b, d.k, d.done);
     return b;
   }
@@ -817,7 +831,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
         <div class="ed-grid"><label class="fld"><span>Weekdays from</span>${hsel('wdFrom', S.wdFrom, S.dayStart, S.dayEnd - 1)}</label><label class="fld"><span>Weekdays until</span>${hsel('wdTo', S.wdTo, S.dayStart + 1, S.dayEnd)}</label>
         <label class="fld"><span>Weekends from</span>${hsel('weFrom', S.weFrom, S.dayStart, S.dayEnd - 1)}</label><label class="fld"><span>Weekends until</span>${hsel('weTo', S.weTo, S.dayStart + 1, S.dayEnd)}</label>
         <label class="fld"><span>Free half hour after</span><select id="set-breakEvery" data-set="breakEvery"><option value="0"${!S.breakEvery ? ' selected' : ''}>No gaps</option>${[1, 1.5, 2].map(v => `<option value="${v}"${S.breakEvery === v ? ' selected' : ''}>${fmtLen(v)} of study</option>`).join('')}</select></label>
-        <label class="fld"><span>New topics last</span><select id="set-defLen" data-set="defLen">${LENS.slice(0, 5).map(v => `<option value="${v}"${S.defLen === v ? ' selected' : ''}>${fmtLen(v)}</option>`).join('')}</select></label>
+        <label class="fld"><span>New topics last</span><select id="set-defLen" data-set="defLen">${lensOpts(S.defLen)}</select></label>
         <label class="fld"><span>Weekly target (hours)</span><input type="number" id="set-target" data-set="target" min="1" max="80" value="${S.target}"></label></div>
         <h3 class="sub-h">Timeline shows</h3>
         <div class="ed-grid"><label class="fld"><span>From</span>${hsel('dayStart', S.dayStart, 5, 12)}</label><label class="fld"><span>Until</span>${hsel('dayEnd', S.dayEnd, 15, 24)}</label></div></section>
@@ -866,13 +880,13 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     const S = state.settings;
     if (b.repeat) {
       if (h == null) { toast('Weekly sessions need a time. Open it to change it.'); return false; }
-      const len = clamp(b.len, 0.5, S.dayEnd - h);
+      const len = clamp(b.len, 1 / U, S.dayEnd - h);
       if (clashes(toK, h, len, b.id).length) { toast('That clashes with something already there.'); return false; }
       b.dow = dow(toK); if (toK < b.date) b.date = toK; b.start = h; b.len = len; return true;
     }
     if (h != null) {
       let len = b.len;
-      while (len > 0.5 && !freeAt(toK, h, len, b.id)) len -= 0.5;
+      while (len > 1 / U + EPS && !freeAt(toK, h, len, b.id)) len = q5(len - 1 / U);
       if (!freeAt(toK, h, len, b.id)) { toast('That time is taken.'); return false; }
       b.date = toK; b.start = h; b.len = len; return true;
     }
@@ -1124,6 +1138,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       snap(); state.blocks = keep; commit(); toast(`Cleared ${plural(n, 'item')}. Weekly sessions stay.`, 'Undo', undo);
     },
     'ed-kind': D => { draft.kind = D.v; renderEditor(); },
+    'ed-lenq': D => { const S = state.settings; draft.len = Number(D.v) / 60; if (draft.start != null) draft.len = clamp(draft.len, 1 / U, Math.max(1 / U, Math.max(S.dayEnd, draft.start + 1 / U) - draft.start)); renderEditor(); },
     'ed-qn': D => { draft.text = draft.text === D.v ? '' : D.v; renderEditor(); },
     'ed-col': D => { draft.col = Number(D.v); renderEditor(); },
     'ed-subj': D => { draft.subjectId = D.v; renderEditor(); },
@@ -1386,17 +1401,17 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     e.preventDefault(); e.stopPropagation();
     const tt = el.closest('.tt'), slot = tt && tt.querySelector('.tt-slot'), rowH = slot ? slot.getBoundingClientRect().height : 32, r0 = Number(tt && tt.dataset.r0) || 1;
     const y0 = e.clientY, len0 = b.len, S = state.settings;
-    const rowStart = Math.round((b.start - S.dayStart) * 2) + r0;
+    const rowStart = Math.round((b.start - S.dayStart) * U) + r0;
     let len = len0;
     const move = ev => {
-      let n = clamp(len0 + Math.round((ev.clientY - y0) / rowH) * 0.5, 0.5, S.dayEnd - b.start);
-      while (n > 0.5 && clashes(k, b.start, n, b.id).length) n -= 0.5;
-      if (n !== len) { len = n; el.style.gridRow = `${rowStart} / span ${Math.round(len * 2)}`; el.classList.toggle('short', len <= 0.5); const tm = el.querySelector('.b-time'); if (tm) tm.firstChild.textContent = `${hh(b.start)}–${hh(b.start + len)}`; }
+      let n = clamp(q5(len0 + Math.round((ev.clientY - y0) / (rowH / 6)) / U), 1 / U, S.dayEnd - b.start);
+      while (n > 1 / U + EPS && clashes(k, b.start, n, b.id).length) n = q5(n - 1 / U);
+      if (Math.abs(n - len) > EPS) { len = n; el.style.gridRow = `${rowStart} / span ${Math.round(len * U)}`; el.classList.toggle('short', len <= 0.5 + EPS); el.classList.toggle('xs', len < 0.5 - EPS && len >= 0.25 - EPS); el.classList.toggle('tiny', len < 0.25 - EPS); const tm = el.querySelector('.b-time'); if (tm) tm.firstChild.textContent = `${hh(b.start)}–${hh(b.start + len)}`; }
     };
     const up = () => {
       document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
       justResized = true; setTimeout(() => { justResized = false; }, 250);
-      if (len !== len0) { snap(); b.len = len; commit(); toast(`Now ${fmtLen(len)}.`, 'Undo', undo); }
+      if (Math.abs(len - len0) > EPS) { snap(); b.len = len; commit(); toast(`Now ${fmtLen(len)}.`, 'Undo', undo); }
     };
     document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
   });

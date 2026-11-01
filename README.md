@@ -1,4 +1,4 @@
-# Vector Revision Hub (version 5.1)
+# Vector Revision Hub (version 5.2)
 
 ## Update your GitHub site
 1. Unzip this. Open the `revision-hub` folder.
@@ -30,6 +30,13 @@ Vector can publish your timetable as a calendar address that Apple Calendar subs
 5. Press **Subscribe in Calendar** (iPhone or Mac) and confirm.
 Notes: one-way only. The file is public to anyone who knows its long random address. The token is stored on that device only and is not in backups. Updates can take up to an hour to show in Apple Calendar.
 When the token expires, make a new one and paste it in.
+
+## Custom lengths and exact times (5 minute steps)
+- Add box: end a topic with a length, like `Mitosis 25m`, `Quadratics 10 min` or `Paper 1 1h30`. The length menu also has 5m, 10m, 15m, 20m, 30m and 45m.
+- Editor: type any length in minutes (steps of 5), or tap a quick length. Start time has hour and minute pickers, so 18:15 works.
+- Pull the bottom edge of any block to resize it in 5 minute steps.
+- Auto-plan packs things back to back with the exact minutes.
+- Very short blocks (under 15 min) show as thin bars. Hover for the name, click to edit.
 
 ## Activities that do not count
 Click any slot, choose **Activity** (gym, football, work, dinner). It sits in the timetable, blocks auto-plan, shows in the calendar file, but never counts toward revision hours or the weekly target.
