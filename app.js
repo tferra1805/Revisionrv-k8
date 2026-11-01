@@ -1,6 +1,6 @@
 window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
 
-/* Vector Revision Hub engine v4: a day / week / month revision planner with your own topics. */
+/* Vector Revision Hub engine v5: day / week / month revision planner, hour-by-hour week grid, activities that do not count, backups and calendar export. */
 (() => {
   'use strict';
 
@@ -82,8 +82,10 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     flash: { label: 'Flashcards', study: true },
     school: { label: 'School', study: false },
     brk: { label: 'Break', study: false },
-    other: { label: 'Other', study: false },
+    other: { label: 'Activity', study: false },
   };
+  const ACT_NAMES = ['Gym', 'Football', 'Work', 'Family', 'Friends', 'Travel', 'Dinner', 'Sleep in'];
+  const ACT_HUES = [195, 330, 40, 270, 140, 10];
   const LANES = [['ideas', 'Ideas'], ['confused', 'Still confused'], ['facts', 'Key facts'], ['got', 'Got it']];
   const PAGES = [['plan', 'Plan', 'grid'], ['focus', 'Focus', 'timer'], ['brainstorm', 'Brainstorm', 'bulb'], ['settings', 'Settings', 'cog']];
   const ZOOMS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
@@ -94,10 +96,10 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
 
   /* ---------- state ---------- */
   const DEF = {
-    v: 4, setupDone: false, exams: [], subjects: [], blocks: [], sessions: [], boards: [], note: '',
+    v: 5, setupDone: false, exams: [], subjects: [], blocks: [], sessions: [], boards: [], note: '', lastBackup: 0, backupSnooze: 0,
     settings: { dayStart: 7, dayEnd: 23, target: 15, wdFrom: 16, wdTo: 20, weFrom: 10, weTo: 17, breakEvery: 1.5, defLen: 1 },
     timer: { focus: 30, short: 5, long: 15, every: 4, mode: 'focus', left: 1800, running: false, endAt: 0, done: 0, log: true, sound: true, blockId: '', blockDate: '', subjectId: '' },
-    ui: { zoom: 'day', addSubj: '', board: '' },
+    ui: { zoom: 'week', addSubj: '', board: '' },
   };
   function normalise(s) {
     s = s && typeof s === 'object' ? s : {};
@@ -106,13 +108,15 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     o.settings = Object.assign({}, DEF.settings, s.settings || {});
     o.timer = Object.assign({}, DEF.timer, s.timer || {});
     o.ui = Object.assign({}, DEF.ui, s.ui || {});
-    if (!ZOOMS.some(z => z[0] === o.ui.zoom)) o.ui.zoom = 'day';
+    if (!ZOOMS.some(z => z[0] === o.ui.zoom)) o.ui.zoom = 'week';
+    o.lastBackup = Number(o.lastBackup) || 0; o.backupSnooze = Number(o.backupSnooze) || 0;
     ['exams', 'subjects', 'blocks', 'sessions', 'boards'].forEach(k => { if (!Array.isArray(o[k])) o[k] = []; });
     o.subjects.forEach(x => { x.board = x.board || ''; x.sme = x.sme || { notes: SME, generic: true }; });
     o.blocks.forEach((b, i) => {
       b.doneOn = b.doneOn || []; b.skip = b.skip || []; b.text = b.text || ''; b.note = b.note || '';
       if (b.start === undefined || b.start === '') b.start = null;
       b.len = Number(b.len) || 1; b.order = b.order || i; b.kind = KINDS[b.kind] ? b.kind : 'revise';
+      b.col = b.col == null || b.col === '' ? null : Number(b.col);
     });
     o.boards.forEach(b => { b.cards = b.cards || []; });
     if (typeof o.note !== 'string') o.note = '';
@@ -139,10 +143,11 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       st.ui.zoom = 'day';
       if (st.subjects.length || st.blocks.length) st.setupDone = true;
     }
+    if (v < 5) st.ui.zoom = 'week';
     const T = st.timer;
     if (T.blockId && !st.blocks.some(b => b.id === T.blockId)) T.blockId = '';
     if (T.subjectId && !st.subjects.some(s => s.id === T.subjectId)) T.subjectId = '';
-    st.v = 4;
+    st.v = 5;
   }
   function load() {
     let raw = null;
@@ -152,7 +157,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     return st;
   }
   let state = load();
-  function save() { try { localStorage.setItem(CFG.key, JSON.stringify(state)); } catch (e) { /* storage unavailable */ } }
+  function save() { try { localStorage.setItem(CFG.key, JSON.stringify(state)); } catch (e) { /* storage unavailable */ } ghSchedule(); }
 
   /* ---------- runtime ---------- */
   let page = 'plan', cursor = today(), draft = null, undoSnap = null, dragInfo = null, titleFlash = 0, lastMinute = new Date().getMinutes();
@@ -178,15 +183,25 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     const K = KINDS[b.kind] || KINDS.other, s = subj(b.subjectId);
     return [b.text && s ? s.name : '', withTime ? (b.start != null ? `${hh(b.start)}–${hh(b.start + b.len)}` : fmtLen(b.len)) : '', b.kind !== 'revise' && (K.study || b.text) ? K.label : '', b.note].filter(Boolean).join(' · ');
   }
-  const hueStyle = b => { const s = subj(b.subjectId); return s ? `--h:${s.hue}` : ''; };
+  const hueStyle = b => { const s = subj(b.subjectId); return s ? `--h:${s.hue}` : b.kind === 'other' ? `--h:${b.col == null ? ACT_HUES[0] : b.col}` : ''; };
   const examsOn = k => state.exams.filter(e => e.date === k);
   const upcomingExams = () => state.exams.filter(e => e.date && untilMs(e.date) > -864e5).sort((a, b) => a.date < b.date ? -1 : 1);
   const win = k => { const S = state.settings; return dow(k) >= 5 ? { from: S.weFrom, to: S.weTo } : { from: S.wdFrom, to: S.wdTo }; };
+  /* only revision kinds count toward hours, topics done and the weekly target. Activities, school and breaks never do. */
   function periodStats(days) {
-    let n = 0, d = 0, hrs = 0;
-    days.forEach(k => itemsOn(k).forEach(b => { if (!isStudy(b)) return; n++; if (isDone(b, k)) d++; if (b.start != null) hrs += b.len; }));
+    let n = 0, d = 0, hrs = 0, doneH = 0, act = 0;
+    days.forEach(k => itemsOn(k).forEach(b => {
+      if (!isStudy(b)) { if (b.kind === 'other' && b.start != null) act += b.len; return; }
+      n++; const dn = isDone(b, k); if (dn) d++;
+      if (b.start != null) { hrs += b.len; if (dn) doneH += b.len; }
+    }));
     const set = new Set(days), focus = state.sessions.filter(s => set.has(s.date)).reduce((a, s) => a + s.minutes, 0);
-    return { n, d, hrs, focus };
+    return { n, d, hrs, doneH, act, focus };
+  }
+  function freeInWindows(days) {
+    let free = 0;
+    days.forEach(k => { const w = win(k); halves(w.from, w.to).forEach(h => { if (!clashes(k, h, 0.5).length) free += 0.5; }); });
+    return free;
   }
   function streak() {
     const active = new Set(state.sessions.map(s => s.date));
@@ -293,7 +308,15 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   const PAGE_FN = () => ({ plan: pgPlan, focus: pgFocus, brainstorm: pgBrainstorm, settings: pgSettings });
   function render() {
     renderNav();
+    { const nv = $('#nav'); if (nv) document.documentElement.style.setProperty('--nav-h', nv.offsetHeight + 'px'); }
+    const hadWk = !!$('#wk-scroll');
     setHTML($('#main'), `<section class="page page-${page}" aria-labelledby="pg-title">${PAGE_FN()[page]()}</section>`);
+    const wk = $('#wk-scroll');
+    if (wk && !hadWk && getComputedStyle(wk).overflowY !== 'visible') {
+      const S = state.settings, slot = wk.querySelector('.tt-slot'), rowH = slot ? slot.getBoundingClientRect().height : 26, ws = weekStart(cursor);
+      const inWeek = today() >= ws && today() <= addDays(ws, 6), target = Math.max(S.dayStart, (inWeek ? nowH() : S.wdFrom) - 1);
+      wk.scrollTop = (target - S.dayStart) * 2 * rowH;
+    }
     if (page === 'focus') { const ta = $('#flashnote'); if (ta) ta.value = state.note; }
     tickClock(); renderTimerLive();
   }
@@ -340,12 +363,12 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       <span class="b-title">${esc(itemTitle(b))}</span>
       ${sub ? `<span class="b-sub">${esc(sub)}</span>` : ''}
       ${K.study ? `<button type="button" class="b-check" data-act="blk-done" data-id="${b.id}" data-k="${k}" aria-pressed="${done}" aria-label="Mark done">${ic('check')}</button>` : ''}
-      ${mode === 'day' ? '<span class="b-resize" data-resize title="Drag to change length"></span>' : ''}</div>`;
+      ${mode === 'day' || mode === 'wk' ? '<span class="b-resize" data-resize title="Drag to change length"></span>' : ''}</div>`;
   }
   function timelineHTML(k) {
     const S = state.settings, t = today(), nh = nowH(), rows = (S.dayEnd - S.dayStart) * 2;
     const row = h => 1 + Math.round((h - S.dayStart) * 2), w = win(k);
-    let out = `<div class="tt tt-day" id="tt-day" style="--cols:1;--rows:${rows}">`;
+    let out = `<div class="tt tt-day" id="tt-day" data-r0="1" style="--cols:1;--rows:${rows}">`;
     for (let h = S.dayStart; h < S.dayEnd; h++) out += `<div class="tt-time" style="grid-row:${row(h)} / span 2">${hh(h)}</div>`;
     halves(S.dayStart, S.dayEnd).forEach(h => {
       const past = k < t || (k === t && h + 0.5 <= nh), inWin = h >= w.from && h < w.to;
@@ -394,20 +417,65 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       </div>`;
   }
 
-  /* ---------- PLAN: week ---------- */
+  /* ---------- PLAN: week (hour-by-hour grid) ---------- */
   function weekView(ws) {
-    const t = today(), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-    return kpis(days, 'this week') + subjBar() + `<div class="week" id="week-scroll" data-scroll>${days.map(k => {
-      const items = planItems(k), st = items.filter(isStudy), d = st.filter(b => isDone(b, k)).length;
-      const hrs = st.filter(b => b.start != null).reduce((a, b) => a + b.len, 0), ex = examsOn(k);
-      return `<section class="wday${k === t ? ' is-today' : ''}${k < t ? ' past' : ''}" data-droplist data-k="${k}">
-        <header class="wday-h"><button type="button" class="wday-d" data-act="goto-day" data-k="${k}" title="Open the timeline for this day"><small>${fmt(k, { weekday: 'short' })}</small><b>${pkey(k).getDate()}</b></button>
-          <div class="wday-meta"><span>${st.length ? `${d}/${st.length} done` : 'Empty'}</span><span>${hrs ? fmtLen(hrs) + ' timed' : ''}</span></div></header>
-        ${ex.map(e => `<p class="exam-tag">${ic('flag')}${esc(e.name)}</p>`).join('')}
-        <ul class="its">${items.map(b => itemRow(b, k, 'week')).join('')}</ul>
-        <form class="qadd" data-form="qadd" data-k="${k}"><input type="text" id="qa-${k}" data-keep placeholder="Add a topic" maxlength="300" aria-label="Add a topic for ${fmt(k, { weekday: 'long' })}" autocomplete="off"><button class="icon-btn" type="submit" aria-label="Add">${ic('plus')}</button></form>
-      </section>`;
-    }).join('')}</div><p class="hint">Type topics into any day. Drag them between days. Click a day's date to open its hour-by-hour timeline.</p>`;
+    const S = state.settings, t = today(), nh = nowH(), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
+    const rows = (S.dayEnd - S.dayStart) * 2, R0 = 3, row = h => R0 + Math.round((h - S.dayStart) * 2);
+    const st = periodStats(days), free = freeInWindows(days), pct = Math.min(100, Math.round(st.hrs / S.target * 100));
+    const defDay = days.includes(t) ? t : days[0];
+    const lens = LENS.slice(0, 5).map(l => `<option value="${l}"${l === S.defLen ? ' selected' : ''}>${fmtLen(l)}</option>`).join('');
+    const dayOpts = days.map(k => `<option value="${k}"${k === defDay ? ' selected' : ''}>${fmt(k, { weekday: 'short', day: 'numeric' })}</option>`).join('');
+
+    const bar = `<div class="tt-bar"><div class="row">
+        <button type="button" class="btn primary" data-act="auto-week">${ic('sparkle')}Auto-plan week</button>
+        <button type="button" class="btn" data-act="copyweek">${ic('copy')}Copy last week</button>
+        <button type="button" class="btn ghost danger" data-act="clearweek" data-confirm="Clear this week?">${ic('trash')}Clear</button></div>
+      <span class="muted-s">Free half hour to add. Drag to move. Pull the bottom edge to resize.</span></div>`;
+
+    const add = `<form class="add wk-add" data-form="add" data-k="${defDay}">
+      ${subjBar()}
+      <div class="add-row"><input type="text" id="add-text" data-keep placeholder="What are you revising? e.g. Ionic bonding" maxlength="300" aria-label="Topic to revise" autocomplete="off">
+        <select id="add-day" data-keep aria-label="Which day">${dayOpts}</select><select id="add-len" aria-label="How long">${lens}</select>
+        <button class="btn primary" type="submit">${ic('plus')}Add</button></div>
+      <p class="hint">Topics land in the <b>To time</b> row of that day. Drag them into the grid, or press Auto-plan. Several at once: separate with a semicolon, or <button type="button" class="link-btn" data-act="bulk-toggle">${bulkOpen ? 'hide the big box' : 'paste a whole list'}</button>.</p>
+      ${bulkOpen ? `<textarea id="bulk-text" data-keep rows="5" placeholder="One topic per line&#10;Biology: Mitosis&#10;Chem: Ionic bonding&#10;Quadratics"></textarea><button type="button" class="btn sm" data-act="bulk-add" data-k="${defDay}">${ic('plus')}Add all</button>` : ''}</form>`;
+
+    const stats = `<div class="tt-stats">
+      <div class="st-main"><b>${fmtLen(st.hrs)}</b><span>revision planned of ${S.target}h</span><i class="bar"><i style="width:${pct}%"></i></i></div>
+      <div><b>${fmtLen(st.doneH)}</b><span>done</span></div>
+      <div><b>${fmtLen(free)}</b><span>free in your study hours</span></div>
+      <div class="st-act"><b>${fmtLen(st.act)}</b><span>activities, not counted</span></div>
+      <div class="tt-legend"><span><i class="lg lg-rev"></i>Revision</span><span><i class="lg lg-sch"></i>School</span><span><i class="lg lg-brk"></i>Break</span><span><i class="lg lg-act"></i>Activity</span></div>
+    </div>`;
+
+    let g = `<div class="tt tt-wk" data-r0="${R0}" style="--rows:${rows}"><div class="tt-corner wk-s1"></div>`;
+    days.forEach((k, i) => {
+      const ds = periodStats([k]), ex = examsOn(k);
+      g += `<button type="button" class="tt-head wk-s1${k === t ? ' is-today' : ''}${k < t ? ' past' : ''}" style="grid-column:${i + 2};grid-row:1" data-act="goto-day" data-k="${k}" title="Open ${fmt(k, { weekday: 'long' })} as a day"><span>${fmt(k, { weekday: 'short' })}</span><b>${pkey(k).getDate()}</b><small>${ex.length ? `${ic('flag')}${esc(ex[0].name)}` : ds.hrs ? fmtLen(ds.hrs) : '·'}</small></button>`;
+    });
+    g += `<div class="tt-trayl wk-s2" style="grid-column:1;grid-row:2">To time</div>`;
+    days.forEach((k, i) => {
+      const list = listOn(k), show = list.slice(0, 3);
+      g += `<div class="tt-tray wk-s2${k === t ? ' is-today' : ''}" data-droplist data-k="${k}" style="grid-column:${i + 2};grid-row:2">
+        ${show.map(b => { const done = isDone(b, k); return `<div role="button" tabindex="0" class="tchip kind-${b.kind}${done ? ' is-done' : ''}" style="${hueStyle(b)}" draggable="${!b.repeat}" data-drag data-id="${b.id}" data-k="${k}" data-act="blk" title="${esc(itemTitle(b))} · ${fmtLen(b.len)}"><i class="sdot"></i><span>${esc(itemTitle(b))}</span><em>${fmtLen(b.len)}</em></div>`; }).join('')}
+        ${list.length > show.length ? `<button type="button" class="tmore" data-act="goto-day" data-k="${k}">+${list.length - show.length} more</button>` : ''}
+        <button type="button" class="tadd" data-act="m-add" data-k="${k}" aria-label="Add something on ${fmt(k, { weekday: 'long' })}">${ic('plus')}</button></div>`;
+    });
+    for (let h = S.dayStart; h < S.dayEnd; h++) g += `<div class="tt-time" style="grid-column:1;grid-row:${row(h)} / span 2">${hh(h)}</div>`;
+    days.forEach((k, i) => {
+      const w = win(k);
+      halves(S.dayStart, S.dayEnd).forEach(h => {
+        const past = k < t || (k === t && h + 0.5 <= nh), inWin = h >= w.from && h < w.to;
+        g += `<button type="button" class="tt-slot${h % 1 ? ' half' : ''}${past ? ' past' : ''}${inWin ? ' in-win' : ''}${k === t ? ' is-today' : ''}" data-act="slot" data-k="${k}" data-h="${h}" style="grid-column:${i + 2};grid-row:${row(h)}" aria-label="Plan ${fmt(k, { weekday: 'long' })} at ${hh(h)}">${ic('plus')}</button>`;
+      });
+      timedOn(k).forEach(b => {
+        const s = Math.max(b.start, S.dayStart), e = Math.min(b.start + b.len, S.dayEnd); if (e <= s) return;
+        g += blockHTML(b, k, `grid-column:${i + 2};grid-row:${row(s)} / span ${Math.round((e - s) * 2)}`, 'wk');
+      });
+      if (k === t && nh >= S.dayStart && nh < S.dayEnd) g += `<div class="tt-now" style="grid-column:${i + 2};grid-row:${row(Math.floor(nh * 2) / 2)}"><i style="top:${((nh * 2) % 1) * 100}%"></i></div>`;
+    });
+    g += '</div>';
+    return bar + add + stats + `<div class="tt-scroll wk-scroll" id="wk-scroll" data-scroll>${g}</div>`;
   }
 
   /* ---------- PLAN: month ---------- */
@@ -449,20 +517,26 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       const ws = weekStart(cursor);
       eyebrow = `${fmt(ws, { day: 'numeric', month: 'short' })} to ${fmt(addDays(ws, 6), { day: 'numeric', month: 'short', year: 'numeric' })}`;
       title = ws === weekStart(t) ? 'This week' : ws === weekStart(addDays(t, 7)) ? 'Next week' : `Week of ${fmt(ws, { day: 'numeric', month: 'short' })}`;
-      lede = 'Plan the days ahead. Type topics straight into each day, then time them on the day itself.';
+      lede = 'Your whole week, half hour by half hour. Revision counts toward your hours. Activities like gym or football sit in the grid but never do.';
     } else {
       eyebrow = 'Month plan'; title = fmt(cursor, { month: 'long', year: 'numeric' });
       lede = 'The big picture. Spread topics across the weeks before your exams.';
     }
     const nav = `<div class="pnav"><button type="button" class="icon-btn" data-act="prev" aria-label="Previous">${ic('left')}</button>${z === 'day' ? `<input type="date" id="day-pick" value="${cursor}" aria-label="Pick a day">` : ''}<button type="button" class="icon-btn" data-act="next" aria-label="Next">${ic('right')}</button><button type="button" class="btn sm" data-act="to-today"${cursor === t ? ' disabled' : ''}>Today</button></div>`;
-    const more = z === 'week' ? `<details class="more"><summary class="btn" aria-label="More options">${ic('more')}</summary><div class="more-menu"><button type="button" class="btn ghost" data-act="auto-week">${ic('sparkle')}Auto-time the whole week</button><button type="button" class="btn ghost" data-act="copyweek">${ic('copy')}Copy last week here</button><button type="button" class="btn ghost danger" data-act="clearweek" data-confirm="Clear this week?">${ic('trash')}Clear this week</button></div></details>` : '';
+    const more = `<button type="button" class="btn" data-act="cal-open" title="Send your plan to Apple Calendar">${ic('calplus')}<span>Calendar</span></button>`;
     const actions = `<div class="row">${seg('zoom', z, ZOOMS, 'Plan view')}${nav}${more}</div>`;
     let body = z === 'day' ? dayView(cursor) : z === 'week' ? weekView(weekStart(cursor)) : monthView(cursor);
     if (z === 'day') {
       const ws = weekStart(cursor);
       body = `<div class="day-strip">${Array.from({ length: 7 }, (_, i) => addDays(ws, i)).map(k => { const st = itemsOn(k).filter(isStudy); return `<button type="button" class="ds${k === t ? ' is-today' : ''}${examsOn(k).length ? ' has-exam' : ''}" data-act="goto-day" data-k="${k}" aria-pressed="${k === cursor}"><small>${fmt(k, { weekday: 'short' })}</small><b>${pkey(k).getDate()}</b><span>${st.length ? `${st.filter(b => isDone(b, k)).length}/${st.length}` : '·'}</span></button>`; }).join('')}</div>` + body;
     }
-    return pageHead(eyebrow, title, lede, actions) + body;
+    return pageHead(eyebrow, title, lede, actions) + backupNudge() + body;
+  }
+  function backupNudge() {
+    if (!state.blocks.length && !state.subjects.length) return '';
+    const age = state.lastBackup ? (Date.now() - state.lastBackup) / 864e5 : Infinity;
+    if (age < 7 || Date.now() < state.backupSnooze) return '';
+    return `<div class="carry nudge">${ic('copy')}<span>${state.lastBackup ? `Your last backup was ${plural(Math.floor(age), 'day')} ago.` : 'You have not saved a backup file yet.'} Two seconds, and your plan is safe.</span><button type="button" class="btn sm" data-act="backup-file">Download backup</button><button type="button" class="btn sm ghost" data-act="backup-snooze">Later</button></div>`;
   }
 
   /* ---------- EDITOR ---------- */
@@ -471,10 +545,10 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     if (o.id) {
       const b = blockById(o.id); if (!b) return;
       const k = o.k || b.date;
-      draft = { id: b.id, k, start: b.start, len: b.len, kind: b.kind, subjectId: b.subjectId || '', text: b.text || '', note: b.note || '', repeat: !!b.repeat, done: isDone(b, k), delAsk: false, newSubj: false };
+      draft = { id: b.id, k, start: b.start, len: b.len, kind: b.kind, col: b.col == null ? null : b.col, subjectId: b.subjectId || '', text: b.text || '', note: b.note || '', repeat: !!b.repeat, done: isDone(b, k), delAsk: false, newSubj: false };
     } else {
       const sid = o.subjectId != null ? o.subjectId : (state.ui.addSubj && subj(state.ui.addSubj) ? state.ui.addSubj : '');
-      draft = { id: null, k: o.k || cursor, start: o.h == null ? null : o.h, len: o.len || S.defLen, kind: o.kind || 'revise', subjectId: sid, text: o.text || '', note: '', repeat: false, done: false, delAsk: false, newSubj: false };
+      draft = { id: null, k: o.k || cursor, start: o.h == null ? null : o.h, len: o.len || S.defLen, kind: o.kind || 'revise', col: null, subjectId: sid, text: o.text || '', note: '', repeat: false, done: false, delAsk: false, newSubj: false };
     }
     if (draft.start != null) draft.len = clamp(draft.len, 0.5, Math.max(0.5, Math.max(S.dayEnd, draft.start + 0.5) - draft.start));
     openModal(editorHTML());
@@ -482,7 +556,8 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   }
   function editorHTML() {
     const d = draft, S = state.settings, K = KINDS[d.kind] || KINDS.other, s = subj(d.subjectId);
-    const kinds = Object.entries(KINDS).map(([k, v]) => `<button type="button" class="chip" data-act="ed-kind" data-v="${k}" aria-pressed="${d.kind === k}">${v.label}</button>`).join('');
+    const kchip = ([k, v]) => `<button type="button" class="chip" data-act="ed-kind" data-v="${k}" aria-pressed="${d.kind === k}">${v.label}</button>`;
+    const kinds = `<span class="kgroup"><em>Counts as revision</em>${Object.entries(KINDS).filter(e => e[1].study).map(kchip).join('')}</span><span class="kgroup"><em>Does not count</em>${Object.entries(KINDS).filter(e => !e[1].study).map(kchip).join('')}</span>`;
     const subjChips = `<button type="button" class="chip" data-act="ed-subj" data-v="" aria-pressed="${!d.subjectId}">None</button>` + state.subjects.map(x => `<button type="button" class="chip schip" data-act="ed-subj" data-v="${x.id}" aria-pressed="${x.id === d.subjectId}" style="--h:${x.hue}"><i class="sdot"></i>${esc(x.name)}</button>`).join('')
       + (d.newSubj ? `<span class="new-subj"><input type="text" id="ed-newsubj" placeholder="Subject name" maxlength="30" aria-label="New subject name"><button type="button" class="btn sm" data-act="ed-subj-create">Add</button></span>` : `<button type="button" class="chip ghost-chip" data-act="ed-subj-new">${ic('plus')}Subject</button>`);
     const lo = Math.min(S.dayStart, d.start == null ? S.dayStart : d.start), hi = Math.max(S.dayEnd, d.start == null ? 0 : d.start + 0.5);
@@ -497,8 +572,10 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     return `<form id="ed-form" class="ed">
       <div class="ed-h"><div><p class="eyebrow">${d.id ? 'Edit' : 'Add to your plan'}</p><h2>${fmt(d.k, { weekday: 'long', day: 'numeric', month: 'long' })}</h2><p class="muted-s">${d.start != null ? `${hh(d.start)} to ${hh(d.start + d.len)}` : 'No time yet'}${d.repeat ? ' · every week' : ''}</p></div><button type="button" class="icon-btn" data-act="modal-close" aria-label="Close">${ic('x')}</button></div>
       <label class="fld fld-big"><span>${K.study ? 'Topic' : 'Label'}</span><input type="text" id="ed-text" data-ed="text" value="${esc(d.text)}" maxlength="100" placeholder="${K.study ? 'e.g. Ionic bonding, or Paper 1 2023' : 'e.g. School, Football, Dinner'}" autocomplete="off"></label>
-      <div class="fld"><span>Subject</span><div class="chips">${subjChips}</div></div>
-      <div class="fld"><span>Type</span><div class="chips">${kinds}</div></div>
+      <div class="fld"><span>Type</span><div class="chips kinds">${kinds}</div><p class="count-note ${K.study ? 'yes' : 'no'}">${K.study ? 'Counts toward your revision hours and weekly target.' : 'Sits in your timetable but does not count toward revision hours.'}</p></div>
+      ${K.study ? `<div class="fld"><span>Subject</span><div class="chips">${subjChips}</div></div>`
+        : d.kind === 'other' ? `<div class="fld"><span>Quick pick</span><div class="chips">${ACT_NAMES.map(n => `<button type="button" class="chip" data-act="ed-qn" data-v="${n}" aria-pressed="${d.text === n}">${n}</button>`).join('')}</div></div>
+      <div class="fld"><span>Colour</span><div class="chips cols">${ACT_HUES.map(h => `<button type="button" class="sw" data-act="ed-col" data-v="${h}" style="--h:${h}" aria-pressed="${(d.col == null ? ACT_HUES[0] : d.col) === h}" aria-label="Colour ${h}"></button>`).join('')}</div></div>` : ''}
       <div class="ed-grid">
         <label class="fld"><span>Day</span><input type="date" id="ed-date" data-ed="k" value="${d.k}"></label>
         <label class="fld"><span>Start</span><select id="ed-start" data-ed="start">${starts}</select></label>
@@ -538,7 +615,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     if (!b) { b = { id: uid(), doneOn: [], skip: [], done: false, order: Date.now() }; state.blocks.push(b); }
     if (d.repeat && d.start != null) { const keep = b.repeat && b.date && b.date < d.k; b.dow = dow(d.k); b.date = keep ? b.date : d.k; b.repeat = true; b.done = false; }
     else { b.repeat = false; b.date = d.k; delete b.dow; }
-    Object.assign(b, { start: d.start, len: d.len, kind: d.kind, subjectId: d.subjectId, text: d.text.trim(), note: d.note.trim() });
+    Object.assign(b, { start: d.start, len: d.len, kind: d.kind, col: d.kind === 'other' ? d.col : null, subjectId: K.study ? d.subjectId : '', text: d.text.trim(), note: d.note.trim() });
     setDone(b, d.k, d.done);
     return b;
   }
@@ -744,10 +821,17 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
         <label class="fld"><span>Weekly target (hours)</span><input type="number" id="set-target" data-set="target" min="1" max="80" value="${S.target}"></label></div>
         <h3 class="sub-h">Timeline shows</h3>
         <div class="ed-grid"><label class="fld"><span>From</span>${hsel('dayStart', S.dayStart, 5, 12)}</label><label class="fld"><span>Until</span>${hsel('dayEnd', S.dayEnd, 15, 24)}</label></div></section>
-      <section class="card"><h2 class="card-title">Your data</h2><p class="muted-s">Everything is saved in this browser only. To move to another device, copy a backup here and paste it there.</p>
-        <div class="row"><button type="button" class="btn" data-act="backup-copy">${ic('copy')}Copy backup</button></div>
-        <label class="fld"><span>Restore from a backup</span><textarea id="restore-text" data-keep rows="4" placeholder="Paste a backup here"></textarea></label>
-        <div class="row"><button type="button" class="btn" data-act="restore" data-confirm="Replace everything?">Restore backup</button><span class="sp"></span><button type="button" class="btn ghost danger" data-act="reset-all" data-confirm="Erase everything?">${ic('trash')}Erase all data</button></div></section></div>`;
+      <section class="card"><h2 class="card-title">Apple Calendar</h2><p class="muted-s">Send your timetable to Apple Calendar as a file. It is a one-way copy, nothing syncs back.</p><div class="row"><button type="button" class="btn" data-act="cal-open">${ic('calplus')}Export to calendar</button></div></section>
+      ${ghCard()}
+      <section class="card data-card"><h2 class="card-title">Your data</h2><p class="muted-s">Your plan is saved in this browser, on this device. Nothing is sent anywhere. A backup file is the safe copy: it protects you from a cleared browser and moves your plan to a new device or a new website.</p>
+        <p class="data-state">${state.lastBackup ? `Last backup file: ${fmt(dkey(new Date(state.lastBackup)), { weekday: 'short', day: 'numeric', month: 'short' })}` : 'No backup file saved yet.'}</p>
+        <div class="row"><button type="button" class="btn primary" data-act="backup-file">${ic('copy')}Download backup file</button><label class="btn file-btn">${ic('arrow')}Restore from a file<input type="file" id="restore-file" accept=".json,application/json" hidden></label></div>
+        <ul class="tips"><li>Keep the same web address. A new address starts empty, so download a backup first and restore it there.</li><li>On iPhone, use Share, then Add to Home Screen. Safari can clear sites you have not opened for a week, and Home Screen apps are exempt.</li><li>Save the file in iCloud Drive and you can restore from any device.</li></ul>
+        <details class="more-d"><summary>Copy and paste instead of a file</summary>
+          <div class="row"><button type="button" class="btn sm" data-act="backup-copy">${ic('copy')}Copy backup text</button></div>
+          <label class="fld"><span>Restore from pasted text</span><textarea id="restore-text" data-keep rows="3" placeholder="Paste a backup here"></textarea></label>
+          <div class="row"><button type="button" class="btn sm" data-act="restore">Restore</button></div></details>
+        <div class="row">${hasBefore() ? `<button type="button" class="btn sm" data-act="restore-undo">Undo the last restore or erase</button>` : ''}<span class="sp"></span><button type="button" class="btn ghost danger" data-act="reset-all" data-confirm="Erase everything?">${ic('trash')}Erase all data</button></div></section></div>`;
   }
 
   /* ---------- live clocks ---------- */
@@ -763,7 +847,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     if (m !== lastMinute) {
       lastMinute = m;
       const ae = document.activeElement;
-      if (page === 'plan' && state.ui.zoom === 'day' && $('#modal').hidden && !(ae && ae.closest && ae.closest('input,textarea,select,[contenteditable="true"],details[open]')) && !dragInfo) render();
+      if (page === 'plan' && (state.ui.zoom === 'day' || state.ui.zoom === 'week') && $('#modal').hidden && !(ae && ae.closest && ae.closest('input,textarea,select,[contenteditable="true"],details[open]')) && !dragInfo) render();
     }
   }
   setInterval(() => { const T = state.timer; if (T.running && Date.now() >= T.endAt) completePhase(); else renderTimerLive(); }, 250);
@@ -797,6 +881,187 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     if (b.start != null && !freeAt(toK, b.start, b.len, b.id)) b.start = null;
     return true;
   }
+  /* ---------- backups and calendar export ---------- */
+  function downloadBlob(blob, name) {
+    const a = document.createElement('a'), url = URL.createObjectURL(blob);
+    a.href = url; a.download = name; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+  const BEFORE_KEY = () => CFG.key + '-before';
+  function stashBefore() { try { localStorage.setItem(BEFORE_KEY(), JSON.stringify(state)); } catch (e) { /* storage unavailable */ } }
+  let pendingRestore = null;
+  function askRestore(text) {
+    let obj;
+    try { obj = JSON.parse(text); } catch (e) { toast('That backup could not be read. Use the whole file, or the whole text you copied.'); return; }
+    if (!obj || !Array.isArray(obj.subjects) || !Array.isArray(obj.blocks)) { toast('That does not look like a Revision Hub backup.'); return; }
+    pendingRestore = obj;
+    const n = obj.blocks.length, sub = obj.subjects.length, ses = (obj.sessions || []).length;
+    openModal(`<div class="ed"><div class="ed-h"><div><p class="eyebrow">Restore a backup</p><h2>Replace what is here?</h2></div><button type="button" class="icon-btn" data-act="modal-close" aria-label="Close">${ic('x')}</button></div>
+      <p class="muted-s">The backup holds ${plural(sub, 'subject')}, ${plural(n, 'planned item')} and ${plural(ses, 'logged session')}. It replaces everything currently in this browser. You can undo it straight after from Settings.</p>
+      <div class="ed-foot"><span class="sp"></span><button type="button" class="btn" data-act="modal-close">Cancel</button><button type="button" class="btn primary" data-act="restore-go">Restore it</button></div></div>`);
+  }
+  function restoreGo() {
+    const obj = pendingRestore; if (!obj) return;
+    stashBefore();
+    state = normalise(obj); migrate(state, obj); state.setupDone = true; pendingRestore = null;
+    closeModal(); cursor = today(); commit(); toast('Backup restored.');
+  }
+  const hasBefore = () => { try { return !!localStorage.getItem(BEFORE_KEY()); } catch (e) { return false; } };
+  function backupFile() {
+    state.lastBackup = Date.now(); save();
+    downloadBlob(new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' }), `${CFG.brand.toLowerCase()}-backup-${today()}.json`);
+    render(); toast('Backup downloaded. Keep it somewhere safe, like iCloud Drive.');
+  }
+
+  /* Apple Calendar: a standard .ics file. One way only, nothing syncs back. */
+  const CAL_N = { week: 7, '4w': 28, '12w': 84 };
+  function calEvents(o) {
+    const ws = weekStart(today()), n = CAL_N[o.range] || 28, out = [];
+    for (let i = 0; i < n; i++) {
+      const k = addDays(ws, i);
+      itemsOn(k).forEach(b => {
+        if (b.start == null) return;
+        const study = isStudy(b);
+        if (o.what === 'rev' ? !study : o.what === 'ra' ? !(study || b.kind === 'other') : false) return;
+        out.push({ b, k });
+      });
+      if (o.exams) examsOn(k).forEach(e => out.push({ exam: e, k }));
+    }
+    return out;
+  }
+  function calOpts() {
+    const v = id => { const el = $('#' + id); return el ? el.value : ''; }, c = id => { const el = $('#' + id); return !!(el && el.checked); };
+    return { what: v('cal-what') || 'ra', range: v('cal-range') || '4w', exams: c('cal-exams'), alarm: c('cal-alarm') };
+  }
+  function icsDT(k, h) { let day = k, m = Math.round(h * 60); if (m >= 1440) { day = addDays(k, 1); m -= 1440; } return day.replace(/-/g, '') + 'T' + pad(Math.floor(m / 60)) + pad(m % 60) + '00'; }
+  function icsText(evs, alarm) {
+    const enc = new TextEncoder(), L = [];
+    const esc2 = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+    const push = line => {
+      let out = '', bytes = 0;
+      for (const ch of line) {
+        const w = enc.encode(ch).length;
+        if (bytes + w > 73) { L.push(out); out = ' '; bytes = 1; }
+        out += ch; bytes += w;
+      }
+      L.push(out);
+    };
+    const d = new Date(), stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+    ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Vector Revision Hub//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Revision', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H'].forEach(push);
+    evs.forEach(ev => {
+      push('BEGIN:VEVENT'); push(`DTSTAMP:${stamp}`);
+      if (ev.exam) {
+        push(`UID:exam-${ev.exam.id}@vector-revision-hub`);
+        push(`DTSTART;VALUE=DATE:${ev.k.replace(/-/g, '')}`); push(`DTEND;VALUE=DATE:${addDays(ev.k, 1).replace(/-/g, '')}`);
+        push(`SUMMARY:${esc2('Exam: ' + ev.exam.name)}`); push('TRANSP:TRANSPARENT'); push('CATEGORIES:Exam');
+      } else {
+        const b = ev.b, s = subj(b.subjectId), K = KINDS[b.kind] || KINDS.other;
+        const title = isStudy(b) && b.text && s ? `${s.name}: ${b.text}` : itemTitle(b);
+        const desc = [b.note, isStudy(b) && s && s.sme && s.sme.notes ? 'Notes: ' + s.sme.notes : ''].filter(Boolean).join('\n');
+        push(`UID:${b.id}-${ev.k}@vector-revision-hub`);
+        push(`DTSTART:${icsDT(ev.k, b.start)}`); push(`DTEND:${icsDT(ev.k, b.start + b.len)}`);
+        push(`SUMMARY:${esc2(title)}`); if (desc) push(`DESCRIPTION:${esc2(desc)}`);
+        push(`CATEGORIES:${K.study ? 'Revision' : K.label}`);
+        if (alarm && K.study) { push('BEGIN:VALARM'); push('ACTION:DISPLAY'); push(`DESCRIPTION:${esc2(title)}`); push('TRIGGER:-PT10M'); push('END:VALARM'); }
+      }
+      push('END:VEVENT');
+    });
+    push('END:VCALENDAR');
+    return L.join('\r\n') + '\r\n';
+  }
+  function calHTML() {
+    return `<div class="ed" id="cal-box"><div class="ed-h"><div><p class="eyebrow">Apple Calendar</p><h2>Send your plan to your calendar</h2></div><button type="button" class="icon-btn" data-act="modal-close" aria-label="Close">${ic('x')}</button></div>
+      <div class="ed-grid">
+        <label class="fld"><span>Include</span><select id="cal-what"><option value="rev">Revision only</option><option value="ra" selected>Revision and activities</option><option value="all">Everything, school and breaks too</option></select></label>
+        <label class="fld"><span>How far ahead</span><select id="cal-range"><option value="week">This week</option><option value="4w" selected>4 weeks</option><option value="12w">12 weeks</option></select></label></div>
+      <div class="ed-toggles"><label class="switch"><input type="checkbox" id="cal-exams" checked><span>Exam dates</span></label><label class="switch"><input type="checkbox" id="cal-alarm"><span>Reminder 10 min before revision</span></label></div>
+      <p class="count-note yes" id="cal-count"></p>
+      <ol class="cal-steps"><li>Download the file.</li><li>In Apple Calendar, first make a new calendar called <b>Revision</b>. Then open the file and choose that calendar. iPhone: open it from Files or Downloads and tap Add All.</li><li>To refresh after changing your plan, delete the Revision calendar and import the new file.</li></ol>
+      <p class="muted-s">This is a one-way copy. Changes made in Apple Calendar do not come back here. Only sessions with a time are included.</p>
+      <div class="ed-foot"><span class="sp"></span><button type="button" class="btn primary" data-act="cal-download">${ic('calplus')}Download .ics file</button></div></div>`;
+  }
+  function calCount() {
+    const el = $('#cal-count'); if (!el) return;
+    const n = calEvents(calOpts()).length;
+    el.textContent = n ? `${plural(n, 'event')} will be in the file.` : 'Nothing with a time in that range yet.';
+  }
+
+  /* ---------- live calendar feed: publishes an .ics file into your own GitHub repo ---------- */
+  /* The access token lives in its own storage key on this device. It is never part of a backup. */
+  const GH_KEY = () => CFG.key + '-gh';
+  function ghLoad() {
+    let o = {}; try { o = JSON.parse(localStorage.getItem(GH_KEY())) || {}; } catch (e) { /* none yet */ }
+    const m = location.hostname.match(/^([^.]+)\.github\.io$/), seg = location.pathname.split('/').filter(Boolean)[0] || '';
+    return Object.assign({ owner: m ? m[1] : '', repo: m && seg && !/\.html?$/i.test(seg) ? seg : '', branch: 'main', token: '', file: '', on: false, what: 'ra', range: '12w', exams: true, alarm: false, last: 0, hash: '', err: '' }, o);
+  }
+  function ghSave(o) { try { localStorage.setItem(GH_KEY(), JSON.stringify(o)); } catch (e) { /* storage unavailable */ } }
+  const ghUrl = g => `https://${g.owner}.github.io/${g.repo}/${g.file}`;
+  const ghReady = g => !!(g.owner && g.repo && g.token && g.file);
+  const b64 = s => { const by = new TextEncoder().encode(s); let bin = ''; for (let i = 0; i < by.length; i += 0x8000) bin += String.fromCharCode.apply(null, by.subarray(i, i + 0x8000)); return btoa(bin); };
+  let ghT = 0, ghBusy = false;
+  function ghSchedule() { const g = ghLoad(); if (!g.on || !ghReady(g)) return; clearTimeout(ghT); ghT = setTimeout(() => ghRun(false), 8000); }
+  async function ghPush(g, manual) {
+    const text = icsText(calEvents({ what: g.what, range: g.range, exams: g.exams }), g.alarm), stable = text.replace(/^DTSTAMP:.*\r\n/gm, '');
+    let h = 5381; for (let i = 0; i < stable.length; i++) h = (((h << 5) + h) + stable.charCodeAt(i)) | 0;
+    const hash = String(h);
+    if (!manual && hash === g.hash) return { skipped: true };
+    const api = `https://api.github.com/repos/${encodeURIComponent(g.owner)}/${encodeURIComponent(g.repo)}/contents/${g.file}`;
+    const hd = { Authorization: 'Bearer ' + g.token, Accept: 'application/vnd.github+json' };
+    const r0 = await fetch(`${api}?ref=${encodeURIComponent(g.branch)}`, { headers: hd, cache: 'no-store' });
+    let sha;
+    if (r0.ok) sha = (await r0.json()).sha;
+    else if (r0.status !== 404) throw new Error(ghErr(r0.status));
+    const body = { message: 'Update calendar feed', content: b64(text), branch: g.branch }; if (sha) body.sha = sha;
+    const r1 = await fetch(api, { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, hd), body: JSON.stringify(body) });
+    if (!r1.ok) throw new Error(ghErr(r1.status));
+    g.hash = hash; g.last = Date.now(); g.err = '';
+    return { skipped: false };
+  }
+  const ghErr = s => s === 401 ? 'GitHub did not accept the token. Check you pasted all of it and that it has not expired.'
+    : s === 403 || s === 404 ? 'GitHub says no. Check the username and repository name, and that the token has Contents: Read and write on that repository.'
+    : s === 409 || s === 422 ? 'GitHub could not save the file. Try Publish now again.' : `GitHub answered with error ${s}.`;
+  async function ghRun(manual) {
+    if (ghBusy) { if (!manual) ghSchedule(); return; }
+    const g = ghLoad();
+    if (!ghReady(g)) { if (manual) toast('Fill in your username, repository and token first.'); return; }
+    ghBusy = true; if (manual) toast('Publishing…');
+    try {
+      const r = await ghPush(g, manual);
+      if (manual) toast(r.skipped ? 'Already up to date.' : 'Published. Calendar picks it up within the hour or so.');
+    } catch (e) {
+      g.err = e instanceof TypeError ? 'Could not reach GitHub. Check your internet connection.' : e.message;
+      if (manual) toast('Could not publish. See the message in Settings.');
+    } finally { ghBusy = false; ghSave(g); if (page === 'settings' && $('#modal').hidden) render(); }
+  }
+  function ghCard() {
+    const g = ghLoad();
+    if (!g.file) { const a = new Uint8Array(10); crypto.getRandomValues(a); g.file = 'cal-' + Array.from(a, x => (x % 36).toString(36)).join('') + '.ics'; ghSave(g); }
+    const ready = ghReady(g), url = ready ? ghUrl(g) : '';
+    const opt = (cur, list) => list.map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`).join('');
+    const status = g.err ? `<p class="gh-status bad">${esc(g.err)}</p>`
+      : g.last ? `<p class="gh-status">Last published ${fmt(dkey(new Date(g.last)), { weekday: 'short', day: 'numeric', month: 'short' })} at ${hh(new Date(g.last).getHours() + new Date(g.last).getMinutes() / 60)}.</p>`
+      : '<p class="gh-status">Not published yet.</p>';
+    return `<section class="card gh-card"><h2 class="card-title">Live calendar</h2>
+      <p class="muted-s">Apple Calendar can subscribe to an address and keep itself up to date. Vector publishes your timetable to that address whenever you change your plan. It is one-way, and anyone who knows the long address can read the file.</p>
+      <div class="ed-grid">
+        <label class="fld"><span>GitHub username</span><input type="text" data-gh="owner" value="${esc(g.owner)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="fld"><span>Repository name</span><input type="text" data-gh="repo" value="${esc(g.repo)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="fld fld-wide"><span>Access token</span><input type="password" data-gh="token" value="${esc(g.token)}" autocomplete="off" placeholder="github_pat_..." spellcheck="false"></label>
+        <label class="fld"><span>Include</span><select data-gh="what">${opt(g.what, [['rev', 'Revision only'], ['ra', 'Revision and activities'], ['all', 'Everything']])}</select></label>
+        <label class="fld"><span>How far ahead</span><select data-gh="range">${opt(g.range, [['4w', '4 weeks'], ['12w', '12 weeks']])}</select></label></div>
+      <div class="ed-toggles"><label class="switch"><input type="checkbox" data-gh="exams"${g.exams ? ' checked' : ''}><span>Exam dates</span></label><label class="switch"><input type="checkbox" data-gh="alarm"${g.alarm ? ' checked' : ''}><span>Reminder 10 min before revision</span></label><label class="switch"><input type="checkbox" data-gh="on"${g.on ? ' checked' : ''}><span>Publish automatically when I change my plan</span></label></div>
+      <div class="row"><button type="button" class="btn primary" data-act="gh-publish">${ic('calplus')}Publish now</button>${ready ? `<a class="btn" href="${esc(url.replace(/^https:/, 'webcal:'))}">${ic('arrow')}Subscribe in Calendar</a><button type="button" class="btn" data-act="gh-copy">${ic('copy')}Copy address</button>` : ''}</div>
+      ${status}
+      <p class="hint">The token stays on this device only and is never part of a backup. Do not set this up on a shared computer. Changes can take up to an hour to show in Apple Calendar, because GitHub and Apple both wait a while between checks.</p>
+      <details class="more-d"><summary>How to get a token (about 3 minutes, once)</summary><ol class="cal-steps">
+        <li>On github.com click your profile picture, then <b>Settings</b>, then <b>Developer settings</b> at the bottom of the left menu.</li>
+        <li><b>Personal access tokens</b>, then <b>Fine-grained tokens</b>, then <b>Generate new token</b>.</li>
+        <li>Name it <b>Vector calendar</b>. Expiration: 1 year. Repository access: <b>Only select repositories</b> and pick the repository your site is in.</li>
+        <li>Under Permissions, <b>Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>. Leave everything else alone.</li>
+        <li>Press <b>Generate token</b> and copy it straight away. GitHub shows it only once. Paste it in the Access token box above.</li>
+        <li>Press <b>Publish now</b>, then <b>Subscribe in Calendar</b> (on iPhone or Mac, tap it and confirm).</li></ol></details></section>`;
+  }
+
   const ACT = {
     'modal-close': closeModal,
     'open-setup': openSetup,
@@ -816,7 +1081,7 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     'subj-new': () => { newSubjOpen = true; render(); const i = $('#new-subj-inline'); if (i) i.focus(); },
     'subj-create': () => { const i = $('#new-subj-inline'), s = i && getSubject(i.value); newSubjOpen = false; if (s) state.ui.addSubj = s.id; commit(); },
     'bulk-toggle': () => { bulkOpen = !bulkOpen; render(); if (bulkOpen) { const t = $('#bulk-text'); if (t) t.focus(); } },
-    'bulk-add': D => { const t = $('#bulk-text'); const n = t && t.value.trim() ? addItems(D.k, t.value, Number($('#add-len').value)) : 0; if (!n) { toast('Type at least one topic.'); return; } t.value = ''; bulkOpen = false; commit(); toast(`${plural(n, 'topic')} added to the list.`); },
+    'bulk-add': D => { const t = $('#bulk-text'), dk = $('#add-day'); const n = t && t.value.trim() ? addItems(dk ? dk.value : D.k, t.value, Number($('#add-len').value)) : 0; if (!n) { toast('Type at least one topic.'); return; } t.value = ''; bulkOpen = false; commit(); toast(`${plural(n, 'topic')} added to the list.`); },
     'm-add': D => openEditor({ k: D.k }),
     slot: D => { if (justResized) return; openEditor({ k: D.k, h: Number(D.h) }); },
     blk: D => { if (justResized) return; openEditor({ id: D.id, k: D.k }); },
@@ -859,6 +1124,8 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       snap(); state.blocks = keep; commit(); toast(`Cleared ${plural(n, 'item')}. Weekly sessions stay.`, 'Undo', undo);
     },
     'ed-kind': D => { draft.kind = D.v; renderEditor(); },
+    'ed-qn': D => { draft.text = draft.text === D.v ? '' : D.v; renderEditor(); },
+    'ed-col': D => { draft.col = Number(D.v); renderEditor(); },
     'ed-subj': D => { draft.subjectId = D.v; renderEditor(); },
     'ed-subj-new': () => { draft.newSubj = true; renderEditor(); const i = $('#ed-newsubj'); if (i) i.focus(); },
     'ed-subj-create': () => { const i = $('#ed-newsubj'), s = i && getSubject(i.value); draft.newSubj = false; if (s) { draft.subjectId = s.id; save(); } renderEditor(); },
@@ -905,13 +1172,29 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       const fb = () => { if (ta) { ta.value = data; ta.focus(); ta.select(); } toast('Backup is in the box below. Press Ctrl+C or Cmd+C to copy it.'); };
       try { navigator.clipboard.writeText(data).then(() => toast('Backup copied. Paste it somewhere safe.'), fb); } catch (e) { fb(); }
     },
-    restore: () => {
-      const ta = $('#restore-text'); let obj;
-      try { obj = JSON.parse(ta.value); } catch (e) { toast('That backup could not be read. Paste the whole text you copied.'); return; }
-      if (!obj || !Array.isArray(obj.subjects)) { toast('That does not look like a Revision Hub backup.'); return; }
-      state = normalise(obj); migrate(state, obj); state.setupDone = true; ta.value = ''; commit(); toast('Backup restored.');
+    restore: () => { const ta = $('#restore-text'); if (!ta || !ta.value.trim()) { toast('Paste a backup into the box first.'); return; } askRestore(ta.value); },
+    'restore-go': restoreGo,
+    'restore-undo': () => {
+      let raw = null; try { raw = JSON.parse(localStorage.getItem(BEFORE_KEY())); } catch (e) { /* none */ }
+      if (!raw) { toast('Nothing to undo.'); return; }
+      state = normalise(raw); migrate(state, raw); try { localStorage.removeItem(BEFORE_KEY()); } catch (e) { /* ignore */ } commit(); toast('Back to how it was.');
     },
-    'reset-all': () => { state = normalise({}); cursor = today(); commit(); toast('All data erased.'); openSetup(); },
+    'backup-file': backupFile,
+    'backup-snooze': () => { state.backupSnooze = Date.now() + 3 * 864e5; commit(); },
+    'gh-publish': () => { ghRun(true); },
+    'gh-copy': () => {
+      const g = ghLoad(), u = ghUrl(g);
+      const fb = () => toast('Could not copy. Long-press the Subscribe button instead.');
+      try { navigator.clipboard.writeText(u).then(() => toast('Address copied.'), fb); } catch (e) { fb(); }
+    },
+    'cal-open': () => { openModal(calHTML()); calCount(); },
+    'cal-download': () => {
+      const o = calOpts(), evs = calEvents(o);
+      if (!evs.length) { toast('Nothing with a time in that range yet.'); return; }
+      downloadBlob(new Blob([icsText(evs, o.alarm)], { type: 'text/calendar;charset=utf-8' }), `revision-${today()}.ics`);
+      toast(`${plural(evs.length, 'event')} downloaded. Open the file to add them.`);
+    },
+    'reset-all': () => { stashBefore(); state = normalise({}); cursor = today(); commit(); toast('All data erased.'); openSetup(); },
   };
 
   /* ---------- events ---------- */
@@ -936,14 +1219,14 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
       const m = $('#su-mock').value, g = $('#su-gcse').value, n = addPicked();
       if (m) state.exams.push({ id: uid(), name: 'Mocks start', date: m });
       if (g) state.exams.push({ id: uid(), name: 'First GCSE exam', date: g });
-      state.setupDone = true; closeModal(); state.ui.zoom = 'day'; cursor = today(); save(); go('plan');
-      toast(n ? `${plural(n, 'subject')} added. Now write today's revision list.` : 'Setup saved.');
+      state.setupDone = true; closeModal(); state.ui.zoom = 'week'; cursor = today(); save(); go('plan');
+      toast(n ? `${plural(n, 'subject')} added. Now add what you want to revise this week.` : 'Setup saved.');
       setTimeout(() => { const i = $('#add-text'); if (i) i.focus(); }, 50);
       return;
     }
     if (id === 'add') {
       const i = $('#add-text'), v = i.value.trim(); if (!v) { i.focus(); return; }
-      const n = addItems(f.dataset.k, v, Number($('#add-len').value)); i.value = ''; commit();
+      const dk = $('#add-day'), n = addItems(dk ? dk.value : f.dataset.k, v, Number($('#add-len').value)); i.value = ''; commit();
       const i2 = $('#add-text'); if (i2) i2.focus();
       if (n > 1) toast(`${plural(n, 'topic')} added.`);
       return;
@@ -985,6 +1268,13 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
   document.addEventListener('change', e => {
     const el = e.target, D = el.dataset;
     if (D.ed) { edChange(el); return; }
+    if (D.gh) {
+      const g = ghLoad(), v = el.type === 'checkbox' ? el.checked : el.value.trim();
+      g[D.gh] = v; if (['what', 'range', 'exams', 'alarm', 'owner', 'repo', 'token'].includes(D.gh)) { g.hash = ''; g.err = ''; }
+      ghSave(g); ghSchedule(); if (D.gh === 'on') toast(v ? 'Automatic publishing is on.' : 'Automatic publishing is off.'); return;
+    }
+    if (el.id === 'restore-file') { const f = el.files && el.files[0]; if (f) f.text().then(askRestore, () => toast('Could not open that file.')); el.value = ''; return; }
+    if (el.id && el.id.startsWith('cal-')) { calCount(); return; }
     if (el.id === 'day-pick') { if (el.value) { cursor = el.value; render(); } return; }
     if (D.set) {
       const S = state.settings, v = Number(el.value); if (!isFinite(v)) return;
@@ -1094,9 +1384,9 @@ window.HUB_CONFIG = { key: 'vector-revision-hub', brand: 'Vector', mark: 'V' };
     const h = e.target.closest && e.target.closest('[data-resize]'); if (!h) return;
     const el = h.closest('.tt-block'), b = blockById(el.dataset.id), k = el.dataset.k; if (!b) return;
     e.preventDefault(); e.stopPropagation();
-    const slot = $('.tt-day .tt-slot'), rowH = slot ? slot.getBoundingClientRect().height : 32;
+    const tt = el.closest('.tt'), slot = tt && tt.querySelector('.tt-slot'), rowH = slot ? slot.getBoundingClientRect().height : 32, r0 = Number(tt && tt.dataset.r0) || 1;
     const y0 = e.clientY, len0 = b.len, S = state.settings;
-    const rowStart = Math.round((b.start - S.dayStart) * 2) + 1;
+    const rowStart = Math.round((b.start - S.dayStart) * 2) + r0;
     let len = len0;
     const move = ev => {
       let n = clamp(len0 + Math.round((ev.clientY - y0) / rowH) * 0.5, 0.5, S.dayEnd - b.start);

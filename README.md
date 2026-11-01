@@ -1,58 +1,35 @@
-# Vector Revision Hub
+# Vector Revision Hub (version 5.1)
 
-Your revision planner as a normal website. No server code, no database: just these files.
+## Update your GitHub site
+1. Unzip this. Open the `revision-hub` folder.
+2. On GitHub open your repo, then **Add file**, then **Upload files**.
+3. Drag in the files from inside the folder (not the folder itself). Files with the same name get replaced.
+4. Press **Commit changes**. Wait about a minute, then refresh the site (Cmd+Shift+R on a Mac).
 
-| File | What it is |
-|---|---|
-| index.html | The page |
-| styles.css | All the styling |
-| app.js | Everything the planner does |
-| icon.svg, icon-180.png, icon-512.png, manifest.webmanifest | Icons so it looks like an app on your phone |
-| robots.txt | Tells search engines not to list it |
+Keep the same repo name. The address stays the same, so your saved plan stays too.
 
-## 1. Put it online (Cloudflare Pages, free)
+## Keep your data safe
+- Your plan lives in the browser you use, on that device. A new web address starts empty.
+- Settings, **Download backup file**. Put the file in iCloud Drive. Do it every week or so. Vector nudges you after 7 days.
+- Settings, **Restore from a file** brings everything back on any device or any new address.
+- iPhone: Share, **Add to Home Screen**. Safari can clear sites you have not opened for a week, Home Screen apps are exempt.
+- Moving from the old Claude version: open it, Settings, Copy backup. On the new site open Settings, "Copy and paste instead of a file", paste, Restore.
 
-1. Make a free account at dash.cloudflare.com.
-2. In the left menu open **Workers & Pages**, then **Create application**.
-3. Choose the **Pages** option, then **Drag and drop your files** (it may say "Upload assets").
-4. Name the project, for example `tommaso-revision`. This becomes the address: `tommaso-revision.pages.dev`.
-5. Drag the whole `revision-hub` folder (or the zip) into the upload box, then press **Deploy site**.
+## Apple Calendar
+Plan page, **Calendar** button. Choose what to include, download the .ics file.
+- Make a new calendar called Revision in Apple Calendar first, then open the file and pick it.
+- iPhone: open the file from Files or Downloads and tap Add All.
+- It is a one-way copy. To refresh, delete the Revision calendar and import a new file.
 
-It is now live, but anyone with the link could open it. Step 2 fixes that.
+## Live Apple Calendar (set up once)
+Vector can publish your timetable as a calendar address that Apple Calendar subscribes to. It updates whenever you change your plan.
+1. github.com, profile picture, **Settings**, **Developer settings**, **Personal access tokens**, **Fine-grained tokens**, **Generate new token**.
+2. Name: Vector calendar. Expiration: 1 year. Repository access: **Only select repositories**, pick your site's repo.
+3. Permissions, **Repository permissions**, **Contents**: **Read and write**. Nothing else. Generate and copy the token (shown once).
+4. In Vector, Settings, **Live calendar**: check username and repository name, paste the token, turn on automatic publishing, press **Publish now**.
+5. Press **Subscribe in Calendar** (iPhone or Mac) and confirm.
+Notes: one-way only. The file is public to anyone who knows its long random address. The token is stored on that device only and is not in backups. Updates can take up to an hour to show in Apple Calendar.
+When the token expires, make a new one and paste it in.
 
-## 2. Make it private (only your email can get in)
-
-1. In the Cloudflare dashboard open **Zero Trust** from the left menu.
-2. The first time, pick a team name and choose the **Free** plan (free for up to 50 users).
-3. Go to **Access**, then **Applications**, then **Add an application**, then **Self-hosted**.
-4. Under the address it should protect, enter:
-   - Subdomain: `*`
-   - Domain: `tommaso-revision.pages.dev` (your project address)
-   - Then add a second address with the subdomain left **empty** and the same domain, so the main address is covered as well as previews.
-5. Under **Policies**, create a policy:
-   - Name: `Only me`
-   - Action: **Allow**
-   - Include rule: **Emails**, value: your email address
-6. Make sure the login method **One-time PIN** is switched on (Zero Trust, Settings, Authentication).
-7. Save. Open your site in a private or incognito window to test. You should be asked for your email, then get a 6-digit code by email. Anyone else is blocked.
-
-You stay logged in for the session length you chose (for example 1 week), so you won't need a code every time.
-
-## 3. Updating it later
-
-When you get new versions of these files: open the project in **Workers & Pages**, press **Create new deployment**, and drag the folder in again. Your saved plan is not affected.
-
-## 4. Put it on your phone
-
-Open your site address in Safari, tap **Share**, then **Add to Home Screen**. It opens full screen like an app.
-
-## Your data
-
-- Everything you type is saved in the browser you used, on that device. Nothing is sent anywhere.
-- Your phone and laptop keep separate copies. Use **Settings > Copy backup**, then **Restore backup** on the other device to move your plan across.
-- Clearing your browser's site data deletes the plan, so copy a backup now and then.
-- To bring over what you already planned in the Claude version: open it, Settings, Copy backup. Then open your new site, Settings, paste into Restore backup.
-
-## Even simpler: no hosting at all
-
-Double-click `index.html` on your laptop. It runs straight from the file, completely private, but only on that one computer.
+## Activities that do not count
+Click any slot, choose **Activity** (gym, football, work, dinner). It sits in the timetable, blocks auto-plan, shows in the calendar file, but never counts toward revision hours or the weekly target.
